@@ -16,9 +16,6 @@ namespace CustomOverlayFramework
         [Description("Open port to communicate with the overlay")]
         public int Port { get; set; } = 7790;
 
-        [Description("Private token, to authenticate the overlay")]
-        public string Token { get; set; } = "changeme";
-
         [Description("Blacklisted user from the overlay (empty for nobody)")]
         public List<string> BlacklistedUserId { get; set; } = new List<string>();
 

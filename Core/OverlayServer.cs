@@ -13,19 +13,21 @@ using System.Threading.Tasks;
 
 namespace CustomOverlayFramework.Core
 {
-    public class OverlayServer
+    public sealed class OverlayServer
     {
         private readonly Config _config;
-        private AuthentificationHandler _authentificationHandler;
+        private readonly ClientSender _clientSender;
+        private readonly AuthentificationHandler _authentificationHandler;
         private TcpListener _listener;
         private volatile bool _isRunning = false;
         private readonly List<TcpClient> _connectedClients = new List<TcpClient>();
         private readonly Dictionary<string, TcpClient> _authentifiedClients = new Dictionary<string, TcpClient>();
 
-        public OverlayServer(Config config)
+        public OverlayServer(Config config, ClientSender clientSender)
         {
             _config = config;
             _authentificationHandler = new AuthentificationHandler(config);
+            _clientSender = clientSender;
         }
 
         public void Start()
@@ -42,7 +44,6 @@ namespace CustomOverlayFramework.Core
         {
             _isRunning = false;
             _listener.Stop();
-            _authentificationHandler = null;
             FlushConnectedClient();
         }
 
@@ -85,18 +86,18 @@ namespace CustomOverlayFramework.Core
             using(client)
             {
 
-                string id = string.Empty;
+                string userId = null;
                 try
                 {
                     NetworkStream stream = client.GetStream();
                     StreamReader reader = new StreamReader(stream, new UTF8Encoding(false));
                     StreamWriter writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
 
-                    IPAddress ip = ((IPEndPoint)client.Client.RemoteEndPoint).Address;
+                    IPAddress userIp = ((IPEndPoint)client.Client.RemoteEndPoint).Address;
                     string line = await reader.ReadLineAsync();
-                    AuthenticationResponse response = _authentificationHandler.Authenticate(line, ip, out string userId);
+                    AuthenticationResponse response = _authentificationHandler.Authenticate(line, userIp, out string requesterUserId);
 
-                    if (_authentifiedClients.ContainsKey(userId))
+                    if (response == AuthenticationResponse.Welcome && _authentifiedClients.ContainsKey(requesterUserId))
                     {
                         response = AuthenticationResponse.AlreadyInUse;
                     }
@@ -105,13 +106,16 @@ namespace CustomOverlayFramework.Core
 
                     if(response != AuthenticationResponse.Welcome)
                     {
-                        Log.Info($"overlay {response} for {userId} {ip.ToString()}");
+                        Log.Info($"overlay {response} for {userId} {userIp.ToString()}");
+                        userId = null;
                         return;
                     }
 
+                    userId = requesterUserId;
                     _authentifiedClients.Add(userId, client);
-                    id = userId;
-                    Log.Info($"Overlay is authentified for {userId} {ip.ToString()}");
+                    _clientSender.Register(userId, writer);
+
+                    Log.Info($"Overlay is authentified for {userId} {userIp.ToString()}");
 
                     while ((line = await reader.ReadLineAsync()) != null)
                     {
@@ -127,9 +131,14 @@ namespace CustomOverlayFramework.Core
                 }
                 finally
                 {
-                    _authentifiedClients.Remove(id);
                     _connectedClients.Remove(client);
-                    Log.Info("A client was disconnected");
+                    
+                    if(userId != null)
+                    {
+                        _authentifiedClients.Remove(userId);
+                        _clientSender.Unregister(userId);
+                        Log.Info($"{userId} was disconnected");
+                    }
                 }
             }
         }
